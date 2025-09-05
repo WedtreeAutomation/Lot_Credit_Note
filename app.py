@@ -265,7 +265,7 @@ def main():
     with tab1:
         st.markdown("### Combine Inventory Reports with ODOO Purchase Order Data")
         
-        # Sidebar
+        # bar
         with st.sidebar:
             st.header("📋 Instructions")
             st.info("""
@@ -274,6 +274,14 @@ def main():
             3. Click 'Process Files' to generate combined report
             4. Download the results as Excel file
             """)
+
+        st.markdown("---")
+        st.header("🔗 Related Applications")
+        st.markdown("""
+        - [Inventory Debit Note](https://inventory-debit-note.streamlit.app/)
+        - [Lot Debit Note](https://lot-debit-note.streamlit.app/)
+        - [Lot Credit Note](https://lot-credit-note.streamlit.app/)
+        """)
         
         # File upload section
         st.markdown('<div class="sub-header">📤 Upload Files</div>', unsafe_allow_html=True)
