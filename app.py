@@ -275,13 +275,13 @@ def main():
             4. Download the results as Excel file
             """)
 
-        st.markdown("---")
-        st.header("🔗 Related Applications")
-        st.markdown("""
-        - [Inventory Debit Note](https://inventory-debit-note.streamlit.app/)
-        - [Lot Debit Note](https://lot-debit-note.streamlit.app/)
-        - [Lot Credit Note](https://lot-credit-note.streamlit.app/)
-        """)
+            st.markdown("---")
+            st.header("🔗 Related Applications")
+            st.markdown("""
+            - [Inventory Debit Note](https://inventory-debit-note.streamlit.app/)
+            - [Lot Debit Note](https://lot-debit-note.streamlit.app/)
+            - [Lot Credit Note](https://lot-credit-note.streamlit.app/)
+            """)
         
         # File upload section
         st.markdown('<div class="sub-header">📤 Upload Files</div>', unsafe_allow_html=True)
