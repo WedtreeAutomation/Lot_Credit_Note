@@ -94,39 +94,69 @@ def test_odoo_connection(config):
     except Exception as e:
         return False, f"❌ Connection error: {str(e)}"
 
+def process_single_file(file, file_type):
+    try:
+        if file_type == 'inventory':
+            # Read inventory report - Processed Returns sheet
+            df = pd.read_excel(file, sheet_name='Processed Returns')
+            
+            # Process inventory data
+            processed = df[['lot', 'product_name', 'vendor', 'cost_price']].copy()
+            processed['vendor_name'] = processed['vendor']
+            processed['product_name'] = processed['product_name']
+            processed['unit_price'] = processed['cost_price']
+            processed['label'] = processed['lot'].astype(str)
+            processed['source'] = 'inventory'
+            processed['quantity'] = 1  # Set quantity to 1 for all records
+            
+            # Select and rename columns for final output
+            final = processed[['vendor_name', 'product_name', 'unit_price', 'label', 'quantity', 'source']]
+            
+        elif file_type == 'odoo':
+            # Read ODOO PO results
+            df = pd.read_excel(file, sheet_name='PO_Results')
+            
+            # Process ODOO data
+            processed = df[['barcode', 'product_name', 'product_ref', 'vendor_name', 'Unit_Price']].copy()
+            processed['label'] = processed['barcode'].astype(str)
+            processed['unit_price'] = processed['Unit_Price']
+            
+            # Combine product_name and product_ref for ODOO data
+            processed['product_name'] = processed['product_name'] + ' ' + processed['product_ref'].astype(str)
+            processed['source'] = 'odoo'
+            processed['quantity'] = 1  # Set quantity to 1 for all records
+            
+            # Select and rename columns for final output
+            final = processed[['vendor_name', 'product_name', 'unit_price', 'label', 'quantity', 'source']]
+        
+        return final
+        
+    except Exception as e:
+        raise Exception(f"Error processing {file_type} file: {str(e)}")
+
 def process_files(inventory_file, odoo_file):
     try:
-        # Read inventory report - Processed Returns sheet
-        inventory_df = pd.read_excel(inventory_file, sheet_name='Processed Returns')
+        # Initialize empty dataframes
+        inventory_final = pd.DataFrame()
+        odoo_final = pd.DataFrame()
         
-        # Read ODOO PO results
-        odoo_df = pd.read_excel(odoo_file, sheet_name='PO_Results')
+        # Process inventory file if provided
+        if inventory_file:
+            inventory_final = process_single_file(inventory_file, 'inventory')
         
-        # Process inventory data - KEEP ALL RECORDS (no duplicate removal)
-        inventory_processed = inventory_df[['lot', 'product_name', 'vendor', 'cost_price']].copy()
-        inventory_processed['vendor_name'] = inventory_processed['vendor']
-        inventory_processed['product_name'] = inventory_processed['product_name']
-        inventory_processed['unit_price'] = inventory_processed['cost_price']
-        inventory_processed['label'] = inventory_processed['lot'].astype(str)
-        inventory_processed['source'] = 'inventory'
-        inventory_processed['quantity'] = 1  # Set quantity to 1 for all records
+        # Process ODOO file if provided
+        if odoo_file:
+            odoo_final = process_single_file(odoo_file, 'odoo')
         
-        # Process ODOO data - KEEP ALL RECORDS (no duplicate removal)
-        odoo_processed = odoo_df[['barcode', 'product_name', 'product_ref', 'vendor_name', 'Unit_Price']].copy()
-        odoo_processed['label'] = odoo_processed['barcode'].astype(str)
-        odoo_processed['unit_price'] = odoo_processed['Unit_Price']
-        
-        # Combine product_name and product_ref for ODOO data
-        odoo_processed['product_name'] = odoo_processed['product_name'] + ' ' + odoo_processed['product_ref'].astype(str)
-        odoo_processed['source'] = 'odoo'
-        odoo_processed['quantity'] = 1  # Set quantity to 1 for all records
-        
-        # Select and rename columns for final output
-        inventory_final = inventory_processed[['vendor_name', 'product_name', 'unit_price', 'label', 'quantity', 'source']]
-        odoo_final = odoo_processed[['vendor_name', 'product_name', 'unit_price', 'label', 'quantity', 'source']]
-        
-        # Combine both datasets - ALL RECORDS INCLUDED
-        final_df = pd.concat([inventory_final, odoo_final], ignore_index=True)
+        # Combine both datasets if available
+        if not inventory_final.empty and not odoo_final.empty:
+            final_df = pd.concat([inventory_final, odoo_final], ignore_index=True)
+        elif not inventory_final.empty:
+            final_df = inventory_final
+        elif not odoo_final.empty:
+            final_df = odoo_final
+        else:
+            raise Exception("No valid files provided")
         
         return final_df
         
@@ -265,14 +295,15 @@ def main():
     with tab1:
         st.markdown("### Combine Inventory Reports with ODOO Purchase Order Data")
         
-        # bar
+        # sidebar
         with st.sidebar:
             st.header("📋 Instructions")
             st.info("""
-            1. Upload Inventory Report Excel
-            2. Upload ODOO PO Results Excel
-            3. Click 'Process Files' to generate combined report
-            4. Download the results as Excel file
+            1. Upload Inventory Report Excel OR
+            2. Upload ODOO PO Results Excel OR
+            3. Upload both files to merge them
+            4. Click 'Process Files' to generate combined report
+            5. Download the results as Excel file
             """)
 
             st.markdown("---")
@@ -317,7 +348,7 @@ def main():
                     st.error(f"❌ Error reading ODOO file: {str(e)}")
         
         # Process button
-        if inventory_file and odoo_file:
+        if inventory_file or odoo_file:
             if st.button("🚀 Process Files", use_container_width=True, key="process_files"):
                 with st.spinner("🔄 Processing files... Please wait."):
                     try:
@@ -350,12 +381,14 @@ def main():
                         
                         with col2:
                             st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-                            st.metric("From Inventory", f"{len(result_df[result_df['source'] == 'inventory']):,}")
+                            inventory_count = len(result_df[result_df['source'] == 'inventory']) if 'inventory' in result_df['source'].values else 0
+                            st.metric("From Inventory", f"{inventory_count:,}")
                             st.markdown('</div>', unsafe_allow_html=True)
                         
                         with col3:
                             st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-                            st.metric("From ODOO", f"{len(result_df[result_df['source'] == 'odoo']):,}")
+                            odoo_count = len(result_df[result_df['source'] == 'odoo']) if 'odoo' in result_df['source'].values else 0
+                            st.metric("From ODOO", f"{odoo_count:,}")
                             st.markdown('</div>', unsafe_allow_html=True)
                         
                         with col4:
@@ -386,7 +419,7 @@ def main():
                         st.error(f"❌ Error processing files: {str(e)}")
         
         else:
-            st.info("📝 Please upload both files to begin processing.")
+            st.info("📝 Please upload at least one file to begin processing.")
     
     with tab2:
         st.markdown("### Odoo Integration - Create Vendor Credit Notes")
