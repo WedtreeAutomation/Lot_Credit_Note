@@ -70,6 +70,60 @@ st.markdown("""
     .tab-container {
         padding: 1rem 0;
     }
+    .app-button {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        padding: 1rem;
+        border-radius: 12px;
+        font-size: 1rem;
+        font-weight: bold;
+        margin: 0.5rem 0;
+        width: 100%;
+        text-align: center;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5rem;
+    }
+    .app-button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+        background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
+    }
+    .app-button-inventory {
+        background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%);
+    }
+    .app-button-inventory:hover {
+        background: linear-gradient(135deg, #ee5a24 0%, #ff6b6b 100%);
+    }
+    .app-button-lot-debit {
+        background: linear-gradient(135deg, #00b894 0%, #00a085 100%);
+    }
+    .app-button-lot-debit:hover {
+        background: linear-gradient(135deg, #00a085 0%, #00b894 100%);
+    }
+    .app-button-lot-credit {
+        background: linear-gradient(135deg, #fdcb6e 0%, #f39c12 100%);
+    }
+    .app-button-lot-credit:hover {
+        background: linear-gradient(135deg, #f39c12 0%, #fdcb6e 100%);
+    }
+    .button-container {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        margin: 1rem 0;
+    }
+    .button-icon {
+        font-size: 1.2rem;
+    }
+    a{
+        text-decoration: none !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -121,8 +175,8 @@ def process_single_file(file, file_type):
             processed['label'] = processed['barcode'].astype(str)
             processed['unit_price'] = processed['Unit_Price']
             
-            # Combine product_name and product_ref for ODOO data
-            processed['product_name'] = processed['product_name'] + ' ' + processed['product_ref'].astype(str)
+            # Set product_name to "LOT SAREES" for ODOO data
+            processed['product_name'] = "LOT SAREES"
             processed['source'] = 'odoo'
             processed['quantity'] = 1  # Set quantity to 1 for all records
             
@@ -188,15 +242,6 @@ def process_odoo_integration(uploaded_file, config):
         uid = common.authenticate(config['db'], config['username'], config['password'], {})
         models = xmlrpc.client.ServerProxy(config['url'] + 'xmlrpc/2/object')
         
-        # === Fetch Company ID ===
-        company_ids = models.execute_kw(config['db'], uid, config['password'],
-            'res.company', 'search',
-            [[['name', '=', config['hq_company_name']]]],
-            {'limit': 1})
-        if not company_ids:
-            raise Exception(f"Company '{config['hq_company_name']}' not found.")
-        company_id = company_ids[0]
-        
         # === Static Values ===
         credit_note_date = date.today().strftime("%Y-%m-%d")
         due_date = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
@@ -212,45 +257,38 @@ def process_odoo_integration(uploaded_file, config):
         
         # === Process Vendor Groups ===
         for vendor_name, group in df_grouped.groupby("Vendor"):
-            # === Fetch Vendor ID ===
-            vendor_ids = models.execute_kw(config['db'], uid, config['password'],
+            # === Fetch Vendor ID (simpler search without company filter) ===
+            vendor_ids = models.execute_kw(
+                config['db'], uid, config['password'],
                 'res.partner', 'search',
-                [[['name', '=', vendor_name], '|', ['company_id', '=', company_id], ['company_id', '=', False]]],
-                {'limit': 1})
+                [[['name', '=', vendor_name]]],
+                {'limit': 1}
+            )
             if not vendor_ids:
                 results.append(f"❌ Vendor '{vendor_name}' not found. Skipping vendor.")
                 continue
             vendor_id = vendor_ids[0]
-            
-            # === Fetch Journal ID ===
-            journal_ids = models.execute_kw(config['db'], uid, config['password'],
-                'account.journal', 'search',
-                [[['type', '=', 'purchase'], ['name', 'ilike', 'Vendor Bills'], ['company_id', '=', company_id]]],
-                {'limit': 1})
-            if not journal_ids:
-                results.append("❌ 'Vendor Bills' journal not found for specified company.")
-                continue
-            journal_id = journal_ids[0]
-            
+
             # === Build Line Items ===
             line_vals = []
             for _, row in group.iterrows():
-                product_name = str(row["Product"])
+                product_name = str(row["Product"]).strip()
                 qty = float(row["Quantity"])
                 price = float(row["CostPrice"])
                 lot_number = str(row["LotNumber"])
-                
-                # === Fetch Product ID ===
-                product_ids = models.execute_kw(config['db'], uid, config['password'],
+
+                # === Fetch Product ID (simpler search without company filter) ===
+                product_ids = models.execute_kw(
+                    config['db'], uid, config['password'],
                     'product.product', 'search',
-                    [[['name', 'ilike', product_name], '|', ['company_id', '=', company_id], ['company_id', '=', False]]],
-                    {'limit': 1})
-                
+                    [[['name', 'ilike', product_name]]],
+                    {'limit': 1}
+                )
                 if not product_ids:
                     results.append(f"❌ Product '{product_name}' not found. Skipping this line.")
                     continue
                 product_id = product_ids[0]
-                
+
                 # === Create Line Value ===
                 line_vals.append((0, 0, {
                     'product_id': product_id,
@@ -258,23 +296,22 @@ def process_odoo_integration(uploaded_file, config):
                     'price_unit': price,
                     'name': f"{product_name} (Lots: {lot_number})",
                 }))
-            
+
             if not line_vals:
                 results.append(f"❌ No valid lines for vendor '{vendor_name}'. Skipping.")
                 continue
-            
-            # === Create Vendor Credit Note ===
-            credit_note_id = models.execute_kw(config['db'], uid, config['password'],
+
+            # === Create Vendor Credit Note (simpler without journal_id and company_id) ===
+            credit_note_id = models.execute_kw(
+                config['db'], uid, config['password'],
                 'account.move', 'create',
                 [{
                     'move_type': 'in_refund',
                     'partner_id': vendor_id,
                     'invoice_date': credit_note_date,
                     'invoice_date_due': due_date,
-                    'journal_id': journal_id,
                     'ref': reference,
                     'invoice_line_ids': line_vals,
-                    'company_id': company_id,
                 }]
             )
             
@@ -308,11 +345,41 @@ def main():
 
             st.markdown("---")
             st.header("🔗 Related Applications")
-            st.markdown("""
-            - [Inventory Debit Note](https://inventory-debit-note.streamlit.app/)
-            - [Lot Debit Note](https://lot-debit-note.streamlit.app/)
-            - [Lot Credit Note](https://lot-credit-note.streamlit.app/)
-            """)
+            
+            # Attractive button links
+            st.markdown('<div class="button-container">', unsafe_allow_html=True)
+            
+            if st.markdown("""
+                <a href="https://inventory-debit-note.streamlit.app/" target="_blank">
+                    <div class="app-button app-button-inventory">
+                        <span class="button-icon">📦</span>
+                        Inventory Debit Note
+                    </div>
+                </a>
+            """, unsafe_allow_html=True):
+                pass
+            
+            if st.markdown("""
+                <a href="https://lot-debit-note.streamlit.app/" target="_blank">
+                    <div class="app-button app-button-lot-debit">
+                        <span class="button-icon">🏷️</span>
+                        Lot Debit Note
+                    </div>
+                </a>
+            """, unsafe_allow_html=True):
+                pass
+            
+            if st.markdown("""
+                <a href="https://lot-credit-note.streamlit.app/" target="_blank">
+                    <div class="app-button app-button-lot-credit">
+                        <span class="button-icon">💰</span>
+                        Lot Credit Note
+                    </div>
+                </a>
+            """, unsafe_allow_html=True):
+                pass
+            
+            st.markdown('</div>', unsafe_allow_html=True)
         
         # File upload section
         st.markdown('<div class="sub-header">📤 Upload Files</div>', unsafe_allow_html=True)
