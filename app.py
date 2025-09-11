@@ -155,10 +155,10 @@ def process_single_file(file, file_type):
             df = pd.read_excel(file, sheet_name='Processed Returns')
             
             # Process inventory data
-            processed = df[['lot', 'product_name', 'vendor', 'cost_price']].copy()
+            processed = df[['lot', 'product_name', 'vendor', 'price_unit']].copy()
             processed['vendor_name'] = processed['vendor']
             processed['product_name'] = processed['product_name']
-            processed['unit_price'] = processed['cost_price']
+            processed['unit_price'] = processed['price_unit']
             processed['label'] = processed['lot'].astype(str)
             processed['source'] = 'inventory'
             processed['quantity'] = 1  # Set quantity to 1 for all records
