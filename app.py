@@ -155,16 +155,17 @@ def process_single_file(file, file_type):
             df = pd.read_excel(file, sheet_name='Processed Returns')
             
             # Process inventory data
-            processed = df[['lot', 'product_name', 'vendor', 'price_unit']].copy()
+            processed = df[['lot', 'product_name', 'vendor', 'cost_price', 'discount']].copy()
             processed['vendor_name'] = processed['vendor']
             processed['product_name'] = processed['product_name']
-            processed['unit_price'] = processed['price_unit']
+            processed['unit_price'] = processed['cost_price']
             processed['label'] = processed['lot'].astype(str)
             processed['source'] = 'inventory'
             processed['quantity'] = 1  # Set quantity to 1 for all records
+            processed['discount'] = processed['discount'].fillna(0)  # Fill NaN with 0
             
             # Select and rename columns for final output
-            final = processed[['vendor_name', 'product_name', 'unit_price', 'label', 'quantity', 'source']]
+            final = processed[['vendor_name', 'product_name', 'unit_price', 'label', 'quantity', 'discount', 'source']]
             
         elif file_type == 'odoo':
             # Read ODOO PO results
@@ -179,9 +180,10 @@ def process_single_file(file, file_type):
             processed['product_name'] = "LOT SAREES"
             processed['source'] = 'odoo'
             processed['quantity'] = 1  # Set quantity to 1 for all records
+            processed['discount'] = 0  # Set discount to 0 for ODOO records
             
             # Select and rename columns for final output
-            final = processed[['vendor_name', 'product_name', 'unit_price', 'label', 'quantity', 'source']]
+            final = processed[['vendor_name', 'product_name', 'unit_price', 'label', 'quantity', 'discount', 'source']]
         
         return final
         
@@ -190,9 +192,9 @@ def process_single_file(file, file_type):
 
 def process_files(inventory_file, odoo_file):
     try:
-        # Initialize empty dataframes
-        inventory_final = pd.DataFrame()
-        odoo_final = pd.DataFrame()
+        # Initialize empty dataframes with consistent columns
+        inventory_final = pd.DataFrame(columns=['vendor_name', 'product_name', 'unit_price', 'label', 'quantity', 'discount', 'source'])
+        odoo_final = pd.DataFrame(columns=['vendor_name', 'product_name', 'unit_price', 'label', 'quantity', 'discount', 'source'])
         
         # Process inventory file if provided
         if inventory_file:
@@ -204,6 +206,7 @@ def process_files(inventory_file, odoo_file):
         
         # Combine both datasets if available
         if not inventory_final.empty and not odoo_final.empty:
+            # Ensure both dataframes have the same columns in the same order
             final_df = pd.concat([inventory_final, odoo_final], ignore_index=True)
         elif not inventory_final.empty:
             final_df = inventory_final
@@ -211,6 +214,9 @@ def process_files(inventory_file, odoo_file):
             final_df = odoo_final
         else:
             raise Exception("No valid files provided")
+        
+        # Ensure discount column is numeric and fill any NaN values with 0
+        final_df['discount'] = pd.to_numeric(final_df['discount'], errors='coerce').fillna(0)
         
         return final_df
         
@@ -223,7 +229,7 @@ def process_odoo_integration(uploaded_file, config):
         df = pd.read_excel(uploaded_file)
         
         # Check if the required columns exist
-        required_columns = ["vendor_name", "product_name", "unit_price", "quantity", "label"]
+        required_columns = ["vendor_name", "product_name", "unit_price", "quantity", "label", "discount"]
         for col in required_columns:
             if col not in df.columns:
                 raise Exception(f"Missing required column: {col}")
@@ -234,21 +240,22 @@ def process_odoo_integration(uploaded_file, config):
             "product_name": "Product",
             "unit_price": "CostPrice",
             "quantity": "Quantity",
-            "label": "LotNumber"
+            "label": "LotNumber",
+            "discount": "Discount"
         })
         
         # === Odoo XML-RPC Connection ===
-        common = xmlrpc.client.ServerProxy(config['url'] + 'xmlrpc/2/common')
+        common = xmlrpc.client.ServerProxy('{}/xmlrpc/2/common'.format(config['url']))
         uid = common.authenticate(config['db'], config['username'], config['password'], {})
-        models = xmlrpc.client.ServerProxy(config['url'] + 'xmlrpc/2/object')
+        models = xmlrpc.client.ServerProxy('{}/xmlrpc/2/object'.format(config['url']))  # Fixed this line
         
         # === Static Values ===
         credit_note_date = date.today().strftime("%Y-%m-%d")
         due_date = (date.today() + timedelta(days=1)).strftime("%Y-%m-%d")
         reference = "Damage"
         
-        # === Group rows by Vendor, Product, CostPrice ===
-        df_grouped = df.groupby(["Vendor", "Product", "CostPrice"], as_index=False).agg({
+        # === Group rows by Vendor, Product, CostPrice, Discount ===
+        df_grouped = df.groupby(["Vendor", "Product", "CostPrice", "Discount"], as_index=False).agg({
             "Quantity": "sum",
             "LotNumber": lambda x: ", ".join(str(v) for v in x if pd.notna(v))
         })
@@ -257,7 +264,7 @@ def process_odoo_integration(uploaded_file, config):
         
         # === Process Vendor Groups ===
         for vendor_name, group in df_grouped.groupby("Vendor"):
-            # === Fetch Vendor ID (simpler search without company filter) ===
+            # === Fetch Vendor ID ===
             vendor_ids = models.execute_kw(
                 config['db'], uid, config['password'],
                 'res.partner', 'search',
@@ -275,9 +282,10 @@ def process_odoo_integration(uploaded_file, config):
                 product_name = str(row["Product"]).strip()
                 qty = float(row["Quantity"])
                 price = float(row["CostPrice"])
+                discount = float(row["Discount"])
                 lot_number = str(row["LotNumber"])
 
-                # === Fetch Product ID (simpler search without company filter) ===
+                # === Fetch Product ID ===
                 product_ids = models.execute_kw(
                     config['db'], uid, config['password'],
                     'product.product', 'search',
@@ -289,19 +297,23 @@ def process_odoo_integration(uploaded_file, config):
                     continue
                 product_id = product_ids[0]
 
+                # === Calculate final price after discount ===
+                final_price = price * (1 - discount / 100) if discount > 0 else price
+
                 # === Create Line Value ===
                 line_vals.append((0, 0, {
                     'product_id': product_id,
                     'quantity': qty,
-                    'price_unit': price,
-                    'name': f"{product_name} (Lots: {lot_number})",
+                    'price_unit': final_price,
+                    'discount': discount,
+                    'name': f"{product_name} (Lots: {lot_number}) - Discount: {discount}%",
                 }))
 
             if not line_vals:
                 results.append(f"❌ No valid lines for vendor '{vendor_name}'. Skipping.")
                 continue
 
-            # === Create Vendor Credit Note (simpler without journal_id and company_id) ===
+            # === Create Vendor Credit Note ===
             credit_note_id = models.execute_kw(
                 config['db'], uid, config['password'],
                 'account.move', 'create',
@@ -321,6 +333,7 @@ def process_odoo_integration(uploaded_file, config):
         
     except Exception as e:
         raise Exception(f"Error processing Odoo integration: {str(e)}")
+    
 
 def main():
     # Header
@@ -439,7 +452,7 @@ def main():
                         # Summary statistics
                         st.markdown('<div class="sub-header">📈 Summary Statistics</div>', unsafe_allow_html=True)
                         
-                        col1, col2, col3, col4 = st.columns(4)
+                        col1, col2, col3, col4,col5 = st.columns(5)
                         
                         with col1:
                             st.markdown('<div class="metric-card">', unsafe_allow_html=True)
@@ -460,8 +473,16 @@ def main():
                         
                         with col4:
                             st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+                            total_discount = (result_df['unit_price'] * result_df['quantity'] * result_df['discount'] / 100).sum()
+                            st.metric("Total Discount", f"₹{total_discount:,.2f}")
+                            st.markdown('</div>', unsafe_allow_html=True)
+
+                        # And update the total value calculation to show net value
+                        with col5:  # Add a fifth column
+                            st.markdown('<div class="metric-card">', unsafe_allow_html=True)
                             total_value = (result_df['unit_price'] * result_df['quantity']).sum()
-                            st.metric("Total Value", f"₹{total_value:,.2f}")
+                            net_value = total_value - total_discount
+                            st.metric("Net Value", f"₹{net_value:,.2f}")
                             st.markdown('</div>', unsafe_allow_html=True)
                         
                         # Download section
