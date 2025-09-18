@@ -155,10 +155,10 @@ def process_single_file(file, file_type):
             df = pd.read_excel(file, sheet_name='Processed Returns')
             
             # Process inventory data
-            processed = df[['lot', 'product_name', 'vendor', 'cost_price', 'discount']].copy()
+            processed = df[['lot', 'product_name', 'vendor', 'price_unit', 'discount']].copy()
             processed['vendor_name'] = processed['vendor']
             processed['product_name'] = processed['product_name']
-            processed['unit_price'] = processed['cost_price']
+            processed['unit_price'] = processed['price_unit']
             processed['label'] = processed['lot'].astype(str)
             processed['source'] = 'inventory'
             processed['quantity'] = 1  # Set quantity to 1 for all records
@@ -297,14 +297,11 @@ def process_odoo_integration(uploaded_file, config):
                     continue
                 product_id = product_ids[0]
 
-                # === Calculate final price after discount ===
-                final_price = price * (1 - discount / 100) if discount > 0 else price
-
                 # === Create Line Value ===
                 line_vals.append((0, 0, {
                     'product_id': product_id,
                     'quantity': qty,
-                    'price_unit': final_price,
+                    'price_unit': price,
                     'discount': discount,
                     'name': f"{product_name} (Lots: {lot_number}) - Discount: {discount}%",
                 }))
