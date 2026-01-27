@@ -2,7 +2,6 @@ python-dotenv
 pandas
 requests
 openpyxl
-streamlit
 plotly
 xlsxwriter
-altair
+streamlit
