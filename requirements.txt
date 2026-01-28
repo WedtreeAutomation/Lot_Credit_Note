@@ -4,4 +4,5 @@ requests
 openpyxl
 plotly
 xlsxwriter
-streamlit
+streamlit==1.53.1
+altair>=5.0.0
